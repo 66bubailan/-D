@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>多关卡跳跃游戏（趣味提示版）</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { overflow: hidden; background: #333; }
+        #game { width: 100vw; height: 100vh; display: block; border: none; }
+        button {
+            position: fixed; top: 10px; padding: 5px 10px;
+            background: #000; color: #fff; border: none;
+            border-radius: 3px; font-size: 16px; cursor: pointer;
+            z-index: 10;
+        }
+        #restartBtn { left: 10px; }
+        #exitBtn { right: 10px; }
+        .ui {
+            position: fixed; top: 40px; font-size: 20px; color: #fff;
+            z-index: 10;
+        }
+        #score { left: 10px; }
+        #level { right: 10px; }
+        .touch {
+            position: fixed; bottom: 20px; width: 50px; height: 50px;
+            background: #000; color: #fff; text-align: center; line-height: 50px;
+            border-radius: 50%; font-size: 20px; z-index: 10; display: none;
+        }
+        .left { left: 20px; }
+        .right { left: 90px; }
+        .jump { right: 20px; }
+        @media (max-width: 768px) { .touch { display: block; } }
+    </style>
+</head>
+<body>
+    <button id="restartBtn">重新开始</button>
+    <button id="exitBtn">退出游戏</button>
+    <div class="ui" id="score">分数: 0 | 生命: 3</div>
+    <div class="ui" id="level">关卡：简单（1/4）</div>
+    <div class="touch left">←</div>
+    <div class="touch right">→</div>
+    <div class="touch jump">↑</div>
+    <canvas id="game"></canvas>
+
+    <script>
+        // 1. 画布初始化（防黑屏核心）
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        let loopId;
+
+        // 2. 关卡配置（含通关专属提示语+生命/速度设定）
+        const levels = [
+            // 关卡1：简单（3命，速度4.5）
+            { 
+                name: '简单', 
+                pSpeed: 4.5, 
+                gravity: 0.7, 
+                maxLives: 3, 
+                passTip: '你以为后面的关卡很简单吗？', // 第一关通关提示
+                plats: [[0,canvas.height-20,canvas.width,20], [150,450,180,20], [400,350,180,20], [650,550,180,20]],
+                coins: [[120,200], [320,150], [520,250], [720,350]],
+                spikes: [[300,canvas.height-50], [550,canvas.height-50]] 
+            },
+            // 关卡2：一般（3命，速度4.5=不加速）
+            { 
+                name: '一般', 
+                pSpeed: 4.5, 
+                gravity: 0.75, 
+                maxLives: 3, 
+                passTip: '哈哈哈，竟然让你过了第一关，后面的难度远超你想象！', // 第二关通关提示
+                plats: [[0,canvas.height-20,canvas.width,20], [150,450,150,20], [400,350,150,20], [650,550,150,20], [850,400,150,20]],
+                coins: [[120,200], [320,150], [520,250], [720,350], [920,250]],
+                spikes: [[300,canvas.height-50], [550,canvas.height-50], [400,380], [650,580]] 
+            },
+            // 关卡3：困难（3命，速度5.0=轻微加速）
+            { 
+                name: '困难', 
+                pSpeed: 5.0, 
+                gravity: 0.8, 
+                maxLives: 3, 
+                passTip: '能到这关算你厉害！但"困难"才不是说说而已，陷阱要多到你哭了～', // 第三关通关提示
+                plats: [[0,canvas.height-20,canvas.width,20], [150,450,120,20], [400,350,120,20], [650,550,120,20], [850,400,120,20]],
+                coins: [[120,200], [320,150], [520,250], [720,350], [920,250], [500,180]],
+                spikes: [[300,canvas.height-50], [550,canvas.height-50], [400,380], [650,580], [150,480], [850,430]] 
+            },
+            // 关卡4：噩梦（2命，速度6.5=拉满）
+            { 
+                name: '噩梦', 
+                pSpeed: 6.5, 
+                gravity: 0.85, 
+                maxLives: 2, 
+                passTip: '天呐！你居然闯到最后一关了？"噩梦"模式开启，2条命能撑住吗？', // 第四关通关提示（对应闯到第四关）
+                finalTip: '我的天！你竟然通关噩梦关了？这游戏对你来说太简单了吧！', // 全通关提示
+                plats: [[0,canvas.height-20,canvas.width,20], [150,450,100,20], [400,350,100,20], [650,550,100,20], [850,400,100,20], [1050,300,100,20]],
+                coins: [[120,200], [320,150], [520,250], [720,350], [920,250], [500,180], [1020,200]],
+                spikes: [[300,canvas.height-50], [550,canvas.height-50], [400,380], [650,580], [150,480], [850,430], [1050,330], [250,300]] 
+            }
+        ];
+
+        // 3. 游戏状态
+        let currentLevel = 0;
+        let score = 0, lives = 3;
+        let px = 50, py = canvas.height - 100;
+        let pw = 40, ph = 50;
+        let pvy = 0;
+        let onGround = true;
+        let left = false, right = false;
+
+        // 4. 当前关卡元素初始化
+        let platList = levels[0].plats;
+        let coinList = levels[0].coins.map(c => [c[0], c[1], false, 0]);
+        let spikeList = levels[0].spikes;
+        let pSpeed = levels[0].pSpeed;
+        let gravity = levels[0].gravity;
+        let doorX = canvas.width - 60, doorY = canvas.height - 80;
+
+        // 5. 输入控制
+        window.onkeydown = (e) => {
+            if(e.key === 'ArrowLeft') left = true;
+            if(e.key === 'ArrowRight') right = true;
+            if(e.key === 'ArrowUp' && onGround) { pvy = -25; onGround = false; }
+        };
+        window.onkeyup = (e) => {
+            if(e.key === 'ArrowLeft') left = false;
+            if(e.key === 'ArrowRight') right = false;
+        };
+        document.querySelector('.left').ontouchstart = () => left = true;
+        document.querySelector('.left').ontouchend = () => left = false;
+        document.querySelector('.right').ontouchstart = () => right = true;
+        document.querySelector('.right').ontouchend = () => right = false;
+        document.querySelector('.jump').ontouchstart = () => {
+            if(onGround) { pvy = -25; onGround = false; }
+        };
+
+        // 6. 功能按钮
+        document.getElementById('restartBtn').onclick = () => {
+            cancelAnimationFrame(loopId);
+            resetLevel(currentLevel);
+            gameLoop();
+        };
+        document.getElementById('exitBtn').onclick = () => {
+            cancelAnimationFrame(loopId);
+            window.close();
+        };
+
+        // 7. 重置关卡（加载当前关卡生命/速度）
+        function resetLevel(levelIdx) {
+            const level = levels[levelIdx];
+            platList = level.plats;
+            coinList = level.coins.map(c => [c[0], c[1], false, 0]);
+            spikeList = level.spikes;
+            pSpeed = level.pSpeed;
+            gravity = level.gravity;
+            lives = level.maxLives;
+            // 重置玩家
+            px = 50; py = canvas.height - 100;
+            pvy = 0; onGround = true;
+            score = 0;
+            // 更新UI
+            document.getElementById('score').textContent = `分数: ${score} | 生命: ${lives}`;
+            document.getElementById('level').textContent = `关卡：${level.name}（${levelIdx+1}/4）`;
+        }
+
+        // 8. 碰撞检测
+        function collide(x1,y1,w1,h1,x2,y2,w2,h2) {
+            return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
+        }
+
+        // 9. 绘制函数
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // 画玩家（红色）
+            ctx.fillStyle = 'red';
+            ctx.fillRect(px, py, pw, ph);
+            // 画平台（灰色）
+            ctx.fillStyle = 'gray';
+            platList.forEach(p => ctx.fillRect(p[0], p[1], p[2], p[3]));
+            // 画金币（黄色+浮动）
+            ctx.fillStyle = 'yellow';
+            coinList.forEach(c => {
+                if(!c[2]) {
+                    c[3] += 0.1;
+                    const animY = Math.sin(c[3]) * 8;
+                    ctx.beginPath();
+                    ctx.arc(c[0], c[1] + animY, 12, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            });
+            // 画陷阱（黑色）
+            ctx.fillStyle = 'black';
+            spikeList.forEach(s => ctx.fillRect(s[0], s[1], 30, 30));
+            // 画终点门（绿色）
+            ctx.fillStyle = 'green';
+            ctx.fillRect(doorX, doorY, 40, 80);
+        }
+
+        // 10. 更新函数（核心：通关时弹出专属提示）
+        function update() {
+            // 玩家移动
+            if(left) px -= pSpeed;
+            if(right) px += pSpeed;
+            // 边界限制
+            if(px < 0) px = 0;
+            if(px + pw > canvas.width) px = canvas.width - pw;
+
+            // 重力和跳跃
+            pvy += gravity;
+            py += pvy;
+
+            // 平台碰撞
+            onGround = false;
+            platList.forEach(p => {
+                if(collide(px, py, pw, ph, p[0], p[1], p[2], p[3]) && pvy >= 0) {
+                    py = p[1] - ph;
+                    pvy = 0;
+                    onGround = true;
+                }
+            });
+
+            // 金币收集
+            coinList.forEach(c => {
+                if(!c[2] && collide(px, py, pw, ph, c[0]-12, c[1]-12, 24, 24)) {
+                    c[2] = true;
+                    score += 10;
+                    document.getElementById('score').textContent = `分数: ${score} | 生命: ${lives}`;
+                }
+            });
+
+            // 陷阱碰撞（生命耗尽处理）
+            spikeList.forEach(s => {
+                if(collide(px, py, pw, ph, s[0], s[1], 30, 30)) {
+                    lives--;
+                    document.getElementById('score').textContent = `分数: ${score} | 生命: ${lives}`;
+                    if(lives <= 0) {
+                        cancelAnimationFrame(loopId);
+                        if(confirm(`游戏结束！分数: ${score}\n是否重新开始当前关卡？`)) {
+                            resetLevel(currentLevel);
+                            gameLoop();
+                        } else {
+                            window.close();
+                        }
+                    } else {
+                        px = 50; py = canvas.height - 100;
+                        pvy = 0; onGround = true;
+                    }
+                }
+            });
+
+            // 通关处理（弹出关卡专属提示）
+            if(collide(px, py, pw, ph, doorX, doorY, 40, 80)) {
+                cancelAnimationFrame(loopId);
+                const currentLevelData = levels[currentLevel];
+                // 非最后一关：显示当前关卡通关提示+是否继续
+                if(currentLevel < levels.length - 1) {
+                    // 提示语格式：通关信息 + 专属提示 + 继续选择
+                    const confirmMsg = `通关${currentLevelData.name}关卡！分数: ${score}\n${currentLevelData.passTip}\n是否继续下一关？`;
+                    if(confirm(confirmMsg)) {
+                        currentLevel++;
+                        // 进入下一关时，再提示欢迎语
+                        alert(`欢迎来到${levels[currentLevel].name}关卡！`);
+                        resetLevel(currentLevel);
+                        gameLoop();
+                    } else {
+                        window.close();
+                    }
+                } 
+                // 最后一关（全通关）：显示专属全通关提示
+                else {
+                    const finalMsg = `恭喜通关所有关卡！最终分数: ${score}\n${currentLevelData.finalTip}\n是否重新开始游戏？`;
+                    if(confirm(finalMsg)) {
+                        currentLevel = 0;
+                        resetLevel(0);
+                        gameLoop();
+                    } else {
+                        window.close();
+                    }
+                }
+            }
+        }
+
+        // 11. 游戏循环
+        function gameLoop() {
+            update();
+            draw();
+            loopId = requestAnimationFrame(gameLoop);
+        }
+
+        // 12. 启动游戏（防黑屏：先画首帧）
+        window.onload = () => {
+            draw();
+            gameLoop();
+        };
+    </script>
+</body>
+</html>
